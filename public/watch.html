@@ -1,0 +1,471 @@
+<!-- public/watch.html (production-ready: video call UI commented out, debug view removed) -->
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>WatchParty — Room</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    :root{
+      --bg:#051021;
+      --panel:#0b1624;
+      --muted:#9fb3cc;
+      --accent:#1e90ff;
+      --accent-2:#0f6ee6;
+      --text:#e6f0fb;
+      --glass: rgba(255,255,255,0.03);
+    }
+    html,body{height:100%;margin:0;background:linear-gradient(180deg,#041123 0%,#061229 100%);font-family:Inter,system-ui,Segoe UI,Roboto,Helvetica,Arial;color:var(--text);}
+    .container{display:flex;height:100vh;padding:18px;gap:18px;box-sizing:border-box}
+    .left, .right { background:var(--panel); border-radius:12px; padding:14px; box-shadow:0 6px 30px rgba(0,0,0,0.5); border:1px solid rgba(30,144,255,0.05); }
+    .left{flex:1; display:flex; flex-direction:column; gap:12px}
+    .right{width:420px; display:flex; flex-direction:column; gap:12px}
+
+    .player-wrap{flex:1; display:flex; flex-direction:column; gap:8px}
+    .video-box{background:var(--glass); border-radius:8px; padding:6px; display:flex; align-items:center; justify-content:center; min-height:320px; position:relative}
+    video#mainPlayer{width:100%; height:auto; max-height:70vh; border-radius:6px; background:black; outline:1px solid rgba(255,255,255,0.03) }
+
+    .meta { display:flex; justify-content:space-between; align-items:center; gap:12px; }
+    .small { font-size:13px; color:var(--muted); }
+
+    .chat { display:flex; flex-direction:column; gap:8px; height:420px; }
+    .messages { flex:1; overflow:auto; padding:8px; border-radius:8px; background:rgba(255,255,255,0.02); }
+    .msg { margin-bottom:8px; }
+    .msg .who { font-weight:700; color:var(--accent); margin-right:6px; }
+    .chat-input { display:flex; gap:8px; }
+    input[type=text].chatfield { flex:1; padding:8px 10px; border-radius:8px; border:1px solid rgba(255,255,255,0.04); background:transparent; color:var(--text); }
+
+    .topbar { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:6px; }
+    .room-pill { background:rgba(30,144,255,0.08); color:var(--accent); padding:6px 10px; border-radius:999px; font-weight:700; }
+
+    .host-requests { margin-top:8px; background:rgba(255,255,255,0.02); padding:8px; border-radius:8px; }
+
+    @media (max-width:900px) {
+      .container { flex-direction:column; padding:12px; }
+      .right { width:100%; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="left">
+      <div class="topbar">
+        <div>
+          <div style="font-weight:800; font-size:18px">WatchParty</div>
+          <div class="small muted">Share room code so friends can join</div>
+        </div>
+        <div style="display:flex; gap:10px; align-items:center">
+          <div class="room-pill" id="roomCode">room</div>
+          <div class="small">You: <span id="myName"></span></div>
+        </div>
+      </div>
+
+      <div class="player-wrap">
+        <div class="video-box" id="videoBox">
+          <video id="mainPlayer" controls playsinline></video>
+        </div>
+
+        <div class="meta">
+          <div class="small">Using native player controls — play/pause broadcast to all; seek is host-authoritative.</div>
+          <div style="display:flex; gap:8px; align-items:center">
+            <input id="fileInput" type="file" accept="video/*" style="display:none"/>
+            <button id="becomeHost" class="btn secondary">Request Host</button>
+          </div>
+        </div>
+
+        <div id="hostRequestsPanel" class="host-requests" style="display:none;">
+          <div style="font-weight:700">Host Requests</div>
+          <div id="hostRequestsList"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="right">
+      <!-- NOTE: video call UI is commented out for now (camera/call features disabled) -->
+      <!--
+      <div style="display:flex; justify-content:space-between; align-items:center">
+        <div style="font-weight:700">Video Call</div>
+        <div class="small muted">Local camera/mic + peer grid</div>
+      </div>
+
+      <div class="call-area">
+        <div class="video-grid" id="videoGrid">
+          <div class="video-tile" id="localTile">
+            <video id="localCam" autoplay muted playsinline></video>
+          </div>
+        </div>
+
+        <div class="call-controls">
+          <button id="startCall" class="call-btn">Start/Join Call</button>
+          <button id="toggleCam" class="call-btn">Toggle Cam</button>
+          <button id="toggleMic" class="call-btn">Toggle Mic</button>
+        </div>
+      </div>
+      -->
+
+      <div style="display:flex; justify-content:space-between; align-items:center">
+        <div style="font-weight:700">Chat</div>
+        <div class="small muted" id="participantsCount">Participants: 1</div>
+      </div>
+
+      <div class="chat">
+        <div class="messages" id="messages"></div>
+        <div class="chat-input">
+          <input id="chatInput" class="chatfield" placeholder="Say something..." />
+          <button id="sendChat" class="btn">Send</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+/* ======== Config & state ======== */
+const WS_URL = location.origin.replace(/^http/, 'ws');
+const urlParams = new URLSearchParams(location.search);
+const myName = urlParams.get('name') || 'Guest';
+const room = urlParams.get('room') || 'default-room';
+let isHost = (urlParams.get('isHost') === '1');
+let myId = null;
+let currentHostId = null;
+
+const participants = new Map();
+const pcs = new Map();
+let localMedia = null;            // CAMERA/CALL-related state kept but camera UI is disabled
+let hostCaptureStream = null;
+let inCall = false;               // call flag (camera/call disabled)
+let pendingHostRequest = false;
+const pendingRequests = new Map();
+let applyingRemote = false;
+let hostTimeSyncInterval = null;
+
+/* ======== UI elements ======== */
+document.getElementById('roomCode').innerText = room;
+document.getElementById('myName').innerText = myName;
+const fileInput = document.getElementById('fileInput');
+const becomeHostBtn = document.getElementById('becomeHost');
+const hostRequestsPanel = document.getElementById('hostRequestsPanel');
+const hostRequestsList = document.getElementById('hostRequestsList');
+const mainPlayer = document.getElementById('mainPlayer');
+
+function dbg(...args){ console.debug(...args); } // console debugging only (no in-page debug UI)
+function appendSystem(text){ const box = document.getElementById('messages'); if(!box) return; const el = document.createElement('div'); el.className='msg'; el.style.opacity=0.85; el.innerHTML = `<span class="who">•</span> <span>${escapeHtml(text)}</span>`; box.appendChild(el); box.scrollTop = box.scrollHeight; }
+function appendMessage(name, text){ const box = document.getElementById('messages'); if(!box) return; const el = document.createElement('div'); el.className='msg'; el.innerHTML = `<span class="who">${escapeHtml(name)}:</span> <span>${escapeHtml(text)}</span>`; box.appendChild(el); box.scrollTop = box.scrollHeight; }
+function escapeHtml(s){ return (s+'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function updateCount(){ const el = document.getElementById('participantsCount'); if(el) el.innerText = 'Participants: ' + (participants.size + 1); }
+
+/* ======== Helpers for participants UI (kept minimal) ======== */
+function refreshParticipantsUI(){
+  // no video tiles in production mode (call UI commented). This function is still kept
+  // so participant list/count updates correctly.
+  updateCount();
+}
+
+/* ======== WebSocket signaling ======== */
+let ws;
+function connectWS(){
+  ws = new WebSocket(WS_URL);
+  ws.onopen = () => {
+    dbg('WS open, joining room', room, 'as', myName, 'isHost?', isHost);
+    ws.send(JSON.stringify({ type:'join', room, name: myName, isHost }));
+    fileInput.style.display = isHost ? 'inline-block' : 'none';
+    becomeHostBtn.innerText = isHost ? 'You are Host' : 'Request Host';
+  };
+
+  ws.onmessage = async (ev) => {
+    const msg = JSON.parse(ev.data);
+    dbg('WS msg', msg);
+
+    if (msg.type === 'joined') {
+      myId = msg.id;
+      currentHostId = msg.hostId || null;
+      (msg.participants || []).forEach(p => participants.set(p.id, p));
+      refreshParticipantsUI();
+      fileInput.style.display = (isHost || currentHostId === myId) ? 'inline-block' : 'none';
+    }
+
+    else if (msg.type === 'new-participant') {
+      participants.set(msg.id, { id: msg.id, name: msg.name, isHost: msg.isHost });
+      refreshParticipantsUI();
+      dbg('new participant', msg.id, msg.name);
+      // Ensure host creates a pc & offer so newcomer can receive host stream
+      try { await createPeerAndOffer(msg.id); } catch (e) { dbg('createPeerAndOffer err', e); }
+    }
+
+    else if (msg.type === 'offer') { await handleOffer(msg); }
+    else if (msg.type === 'answer') { await handleAnswer(msg); }
+    else if (msg.type === 'ice') { await handleIce(msg); }
+
+    else if (msg.type === 'participant-left') {
+      const id = msg.id; removePeer(id); participants.delete(id); refreshParticipantsUI();
+    }
+
+    else if (msg.type === 'chat') {
+      appendMessage(msg.fromName, msg.text);
+    }
+
+    else if (msg.type === 'host-request') {
+      if (isHost) {
+        pendingRequests.set(msg.from, { id: msg.from, name: msg.name, requestedAction: msg.action });
+        renderHostRequests();
+        appendSystem(`${msg.name} requested host / action`);
+      }
+    }
+
+    else if (msg.type === 'host-granted') {
+      if (msg.targetId === myId) {
+        isHost = true; currentHostId = myId; fileInput.style.display = 'inline-block'; becomeHostBtn.innerText = 'You are Host'; appendSystem('You are now the host'); startHostTimeSync();
+      }
+    }
+
+    else if (msg.type === 'host-denied') {
+      if (msg.targetId === myId) { pendingHostRequest = false; becomeHostBtn.innerText = 'Request Host'; appendSystem('Host request denied'); }
+    }
+
+    else if (msg.type === 'host-changed') {
+      currentHostId = msg.hostId; isHost = (currentHostId === myId);
+      fileInput.style.display = isHost ? 'inline-block' : 'none';
+      becomeHostBtn.innerText = isHost ? 'You are Host' : (pendingHostRequest ? 'Request pending…' : 'Request Host');
+      appendSystem('Host changed');
+      if (!isHost) stopHostTimeSync();
+    }
+
+    else if (msg.type === 'host-left') {
+      appendSystem('Host left the room'); currentHostId = null; isHost = false; fileInput.style.display = 'none'; becomeHostBtn.innerText = 'Request Host'; stopHostTimeSync();
+    }
+
+    else if (msg.type === 'control-request') {
+      if (isHost && msg.from) {
+        pendingRequests.set(msg.from, { id: msg.from, name: msg.fromName, requestedAction: msg.action });
+        renderHostRequests();
+        appendSystem(`${msg.fromName} requested action: ${JSON.stringify(msg.action)}`);
+      }
+    }
+
+    else if (msg.type === 'control') {
+      handleAuthoritativeControl(msg.action, msg.from);
+    }
+  };
+
+  ws.onclose = () => { dbg('WS closed'); appendSystem('Signaling disconnected'); };
+}
+connectWS();
+
+/* ======== Host request UI & flow ======== */
+becomeHostBtn.onclick = () => {
+  if (isHost) { appendSystem('You are already the host'); return; }
+  if (pendingHostRequest) { appendSystem('Host request already pending'); return; }
+  ws.send(JSON.stringify({ type:'host-request', room })); pendingHostRequest = true; becomeHostBtn.innerText = 'Request pending…'; appendSystem('Host request sent');
+};
+
+function renderHostRequests(){
+  if (!isHost) { hostRequestsPanel.style.display = 'none'; return; }
+  hostRequestsPanel.style.display = 'block';
+  hostRequestsList.innerHTML = '';
+  for (const [id, r] of pendingRequests) {
+    const el = document.createElement('div');
+    el.style.display = 'flex'; el.style.justifyContent = 'space-between'; el.style.alignItems = 'center'; el.style.padding = '6px 0';
+    el.innerHTML = `<div><strong>${escapeHtml(r.name)}</strong> <span style="color:var(--muted);font-size:12px">${r.requestedAction ? ' - ' + JSON.stringify(r.requestedAction) : ''}</span></div>`;
+    const btns = document.createElement('div');
+    const approve = document.createElement('button'); approve.className='btn'; approve.textContent='Approve';
+    approve.onclick = () => { ws.send(JSON.stringify({ type:'host-request-response', room, approved:true, targetId: id })); pendingRequests.delete(id); renderHostRequests(); appendSystem('Approved host request for ' + r.name); };
+    const deny = document.createElement('button'); deny.className='btn secondary'; deny.textContent='Deny';
+    deny.onclick = () => { ws.send(JSON.stringify({ type:'host-request-response', room, approved:false, targetId: id })); pendingRequests.delete(id); renderHostRequests(); appendSystem('Denied host request for ' + r.name); };
+    btns.appendChild(approve); btns.appendChild(deny); el.appendChild(btns); hostRequestsList.appendChild(el);
+  }
+}
+
+/* ======== Chat ======== */
+document.getElementById('sendChat').onclick = () => {
+  const text = document.getElementById('chatInput').value.trim();
+  if (!text) return;
+  ws.send(JSON.stringify({ type:'chat', room, text }));
+  document.getElementById('chatInput').value = '';
+};
+
+/* ======== Controls and sync logic (native controls) ======== */
+mainPlayer.addEventListener('play', () => {
+  if (applyingRemote) return;
+  const action = { type:'play', time: mainPlayer.currentTime, ts: Date.now() };
+  ws.send(JSON.stringify({ type:'control', room, action }));
+});
+mainPlayer.addEventListener('pause', () => {
+  if (applyingRemote) return;
+  const action = { type:'pause', time: mainPlayer.currentTime, ts: Date.now() };
+  ws.send(JSON.stringify({ type:'control', room, action }));
+});
+mainPlayer.addEventListener('seeked', () => {
+  if (applyingRemote) return;
+  const t = mainPlayer.currentTime;
+  if (isHost) ws.send(JSON.stringify({ type:'control', room, action: { type:'seek', time: t, ts: Date.now() } }));
+  else { ws.send(JSON.stringify({ type:'control-request', room, action: { type:'seek', time: t } })); appendSystem('Seek request sent to host: ' + t.toFixed(2)); }
+});
+
+function startHostTimeSync() {
+  stopHostTimeSync();
+  if (!isHost) return;
+  hostTimeSyncInterval = setInterval(() => {
+    ws.send(JSON.stringify({ type:'control', room, action: { type:'timeupdate', time: mainPlayer.currentTime, ts: Date.now() } }));
+  }, 2000);
+}
+function stopHostTimeSync() { if (hostTimeSyncInterval) clearInterval(hostTimeSyncInterval); hostTimeSyncInterval = null; }
+
+function handleAuthoritativeControl(action, fromId) {
+  applyingRemote = true;
+  try {
+    if (action.type === 'play') mainPlayer.play().catch(()=>{});
+    else if (action.type === 'pause') mainPlayer.pause();
+    else if (action.type === 'seek') { try { mainPlayer.currentTime = action.time; } catch(e){} appendSystem('Seek to ' + (action.time||0).toFixed(2)); }
+    else if (action.type === 'timeupdate') { const dt = Math.abs((mainPlayer.currentTime || 0) - (action.time || 0)); if (dt > 0.8) { try { mainPlayer.currentTime = action.time; appendSystem('Sync adjust by ' + dt.toFixed(2) + 's'); } catch(e){} } }
+  } catch (e) { dbg('handleAuthControl err', e); }
+  setTimeout(()=> applyingRemote = false, 250);
+}
+
+/* ======== Capture stream creation & renegotiation (host -> viewers) ======== */
+fileInput.onchange = async (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  mainPlayer.src = URL.createObjectURL(f);
+  if (!isHost) { appendSystem('Only the host can share a file'); return; }
+
+  await mainPlayer.play().catch(()=>{});
+  try {
+    hostCaptureStream = mainPlayer.captureStream();
+    appendSystem('Host captureStream created');
+    dbg('hostCaptureStream tracks', hostCaptureStream.getTracks().map(t => t.kind + ':' + t.id));
+    startHostTimeSync();
+
+    for (const [pid, p] of participants) {
+      if (pid === myId) continue;
+      const pc = pcs.get(pid);
+      if (pc) {
+        hostCaptureStream.getTracks().forEach(track => { try { pc.addTrack(track, hostCaptureStream); } catch (e) { dbg('addTrack failed', e); } });
+        try { const offer = await pc.createOffer(); await pc.setLocalDescription(offer); ws.send(JSON.stringify({ type:'offer', room, to: pid, from: myId, offer })); dbg('renegotiation offer sent to', pid); }
+        catch (err) { dbg('reneg error', err); }
+      } else {
+        try { await createPeerAndOffer(pid); dbg('created pc+offer for', pid); } catch (err) { dbg('createPeerAndOffer err', err); }
+      }
+    }
+  } catch (err) {
+    appendSystem('captureStream not supported in this browser');
+    dbg('captureStream err', err);
+  }
+};
+
+/* ======== Multi-party WebRTC (mesh for host stream distribution) ======== */
+/* NOTE: camera/call features are disabled in the UI, but the PeerConnection handling
+   below remains so the host broadcast (captureStream) can be negotiated to viewers.
+   Camera/localMedia logic kept but not wired to UI (commented out). */
+async function createPeerAndOffer(targetId) {
+  if (pcs.has(targetId)) return;
+  const pc = new RTCPeerConnection({ iceServers: [{ urls:'stun:stun.l.google.com:19302' }] });
+  pcs.set(targetId, pc);
+
+  pc.onicecandidate = (e) => {
+    if (e.candidate) ws.send(JSON.stringify({ type:'ice', room, to: targetId, from: myId, candidate: e.candidate }));
+  };
+
+  pc.ontrack = (ev) => {
+    dbg('pc.ontrack from', targetId, ev.streams);
+    // If incoming stream is host stream, attach to mainPlayer for viewers.
+    if (currentHostId && targetId === currentHostId) {
+      mainPlayer.srcObject = ev.streams[0];
+      mainPlayer.muted = false;
+      try { mainPlayer.play().catch(()=>{}); } catch(e){}
+      appendSystem('Receiving host stream');
+    } else {
+      // Camera/call streams are not used in production UI (call UI commented).
+      // If you re-enable call UI later, attach ev.streams to remote tiles there.
+      dbg('received non-host stream (call UI disabled)');
+    }
+  };
+
+  // We do NOT add local camera tracks here because camera UI is disabled.
+  // If you re-enable camera later, restore adding localMedia tracks and renegotiation.
+  if (isHost && hostCaptureStream) {
+    hostCaptureStream.getTracks().forEach(t => {
+      try { pc.addTrack(t, hostCaptureStream); } catch(e) { dbg('addTrack host capture failed', e); }
+    });
+  } else {
+    // Request incoming media to allow offer/answer negotiation to succeed when appropriate.
+    try {
+      pc.addTransceiver('video', { direction: 'recvonly' });
+      pc.addTransceiver('audio', { direction: 'recvonly' });
+    } catch(e){ /* ignore if not supported */ }
+  }
+
+  try {
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    ws.send(JSON.stringify({ type:'offer', room, to: targetId, from: myId, offer }));
+    dbg('offer sent to', targetId);
+  } catch (e) { dbg('createOffer error', e); }
+
+  pc.onconnectionstatechange = () => dbg('pc state', targetId, pc.connectionState);
+  pc.oniceconnectionstatechange = () => dbg('pc ice state', targetId, pc.iceConnectionState);
+}
+
+/* ======== Offer/Answer/ICE handlers ======== */
+async function handleOffer(msg) {
+  const remoteId = msg.from;
+  const offer = msg.offer;
+  dbg('handleOffer from', remoteId);
+  let pc = pcs.get(remoteId);
+  if (!pc) {
+    pc = new RTCPeerConnection({ iceServers:[{ urls:'stun:stun.l.google.com:19302' }] });
+    pcs.set(remoteId, pc);
+
+    pc.onicecandidate = (e) => { if (e.candidate) ws.send(JSON.stringify({ type:'ice', room, to: remoteId, from: myId, candidate: e.candidate })); };
+
+    pc.ontrack = (ev) => {
+      dbg('ontrack (answerer) from', remoteId, ev.streams);
+      if (currentHostId && remoteId === currentHostId) {
+        mainPlayer.srcObject = ev.streams[0];
+        mainPlayer.muted = false;
+        try { mainPlayer.play().catch(()=>{}); } catch(e){}
+        appendSystem('Receiving host stream (via offer)');
+      } else {
+        dbg('received non-host stream (call UI disabled)');
+      }
+    };
+
+    // Request recvonly so we can get the host stream and negotiate even without sending tracks.
+    try { pc.addTransceiver('video', { direction: 'recvonly' }); pc.addTransceiver('audio', { direction: 'recvonly' }); } catch(e) { dbg('transceiver err', e); }
+  }
+
+  await pc.setRemoteDescription(offer);
+  const answer = await pc.createAnswer();
+  await pc.setLocalDescription(answer);
+  ws.send(JSON.stringify({ type:'answer', room, to: remoteId, from: myId, answer }));
+  dbg('sent answer to', remoteId);
+}
+
+async function handleAnswer(msg) {
+  const remoteId = msg.from;
+  const pc = pcs.get(remoteId);
+  if (!pc) { dbg('no pc for answer from', remoteId); return; }
+  await pc.setRemoteDescription(msg.answer);
+  dbg('set remote description (answer) from', remoteId);
+}
+
+async function handleIce(msg) {
+  const remoteId = msg.from;
+  const candidate = msg.candidate;
+  const pc = pcs.get(remoteId);
+  if (!pc) { dbg('no pc for ice from', remoteId); return; }
+  try { await pc.addIceCandidate(candidate); dbg('added ICE candidate from', remoteId); } catch (e) { dbg('addIceCandidate err', e); }
+}
+
+/* ======== cleanup & init UI ======== */
+window.addEventListener('beforeunload', () => {
+  try { ws.close(); } catch(e){}
+  pcs.forEach(pc => { try { pc.close(); } catch(e){} });
+  stopHostTimeSync();
+});
+document.getElementById('roomCode').innerText = room;
+document.getElementById('myName').innerText = myName;
+appendSystem('Joined room: ' + room);
+updateCount();
+
+</script>
+</body>
+</html>

@@ -1,0 +1,64 @@
+<!-- public/index.html -->
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>WatchParty — Login</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    :root {
+      --bg: #0b1220;
+      --panel: #0f1a2b;
+      --accent: #1e90ff; /* blue */
+      --muted: #9fb3cc;
+      --text: #e6f0fb;
+    }
+    body { margin:0; min-height:100vh; background: linear-gradient(180deg,#071124 0%, #071a2a 100%); color:var(--text); font-family:Inter,system-ui,Segoe UI,Roboto,Helvetica,Arial; display:flex; align-items:center; justify-content:center;}
+    .card { width:380px; background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01)); border-radius:12px; padding:20px; box-shadow: 0 6px 30px rgba(0,0,0,0.6); border:1px solid rgba(30,144,255,0.06);}
+    h1 { margin:0 0 10px 0; font-size:20px; color:var(--accent); }
+    label { display:block; font-size:13px; color:var(--muted); margin-top:12px; }
+    input[type=text] { width:100%; padding:10px 12px; margin-top:6px; border-radius:8px; border:1px solid rgba(255,255,255,0.04); background:rgba(255,255,255,0.02); color:var(--text); }
+    .row { display:flex; gap:8px; align-items:center; margin-top:12px; }
+    .btn { background:var(--accent); color:#001225; padding:10px 14px; border-radius:8px; border:none; font-weight:600; cursor:pointer; flex:1; }
+    .small { font-size:13px; color:var(--muted); }
+    .footer { margin-top:14px; font-size:12px; color:var(--muted); text-align:center; }
+    .checkbox { display:flex; gap:8px; align-items:center; margin-top:10px; }
+    .room-pref { display:flex; gap:8px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>WatchParty</h1>
+    <div class="small">Join or create a room — invite your friends using the room code.</div>
+
+    <label>Your name</label>
+    <input id="name" type="text" placeholder="e.g. Alice" />
+
+    <label>Room code</label>
+    <input id="room" type="text" placeholder="Type a room code (e.g. movie-night)" />
+
+    <div class="checkbox">
+      <input id="isHost" type="checkbox" />
+      <div class="small">I will be the host (share my local file)</div>
+    </div>
+
+    <div class="row">
+      <button id="joinBtn" class="btn">Join Room</button>
+    </div>
+
+    <div class="footer">Theme: dark &nbsp; • &nbsp; accent: blue</div>
+  </div>
+
+<script>
+  document.getElementById('joinBtn').onclick = () => {
+    const name = document.getElementById('name').value.trim();
+    const room = document.getElementById('room').value.trim();
+    const isHost = document.getElementById('isHost').checked;
+    if (!name || !room) return alert('Please enter name and room code');
+    // Pass via query string
+    const qs = new URLSearchParams({ name, room, isHost: isHost ? '1' : '0' }).toString();
+    location.href = '/watch.html?' + qs;
+  };
+</script>
+</body>
+</html>

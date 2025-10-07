@@ -1,0 +1,18 @@
+{
+  "name": "streamrr-backend",
+  "version": "1.0.0",
+  "description": "Signaling + static server for WatchParty",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "uuid": "^9.0.0",
+    "ws": "^8.13.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
