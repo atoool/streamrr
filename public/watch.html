@@ -62,12 +62,8 @@
 
       <div class="player-wrap">
         <div class="video-box" id="videoBox">
-              <video id="mainPlayer" controls playsinline></video>
-              <!-- Hidden fallback audio element: some browsers/devices will separate audio
-                   playback from the video element or block autoplay with audio. We attach
-                   received streams here as a fallback for audio-only playback. -->
-              <audio id="mainAudio" style="display:none" playsinline></audio>
-            </div>
+          <video id="mainPlayer" controls playsinline></video>
+        </div>
 
         <div class="meta">
           <div class="small">Using native player controls — play/pause broadcast to all; seek is host-authoritative.</div>
@@ -162,50 +158,6 @@ function refreshParticipantsUI(){
   // no video tiles in production mode (call UI commented). This function is still kept
   // so participant list/count updates correctly.
   updateCount();
-}
-
-/* ======== Incoming stream handling & diagnostics ======== */
-const mainAudio = document.getElementById('mainAudio');
-
-function analyzeStream(stream, label){
-  try{
-    const at = stream.getAudioTracks() || [];
-    const vt = stream.getVideoTracks() || [];
-    dbg('analyzeStream', label, 'audioTracks=', at.map(t=>t.id+':' + t.kind), 'videoTracks=', vt.map(t=>t.id+':' + t.kind));
-    appendSystem(`${label}: audioTracks=${at.length}, videoTracks=${vt.length}`);
-    return { audioCount: at.length, videoCount: vt.length };
-  }catch(e){ dbg('analyzeStream err', e); appendSystem(label + ': error analyzing stream'); return { audioCount:0, videoCount:0 }; }
-}
-
-async function handleIncomingStream(stream, fromId, note){
-  const label = `Stream from ${fromId || 'unknown'}${note? ' ('+note+')':''}`;
-  const info = analyzeStream(stream, label);
-
-  // Attach stream to video element so viewers see video when available
-  try{
-    mainPlayer.srcObject = stream;
-    mainPlayer.muted = false;
-    // try to play; may be blocked by autoplay policy if audio present and no user gesture
-    await mainPlayer.play().catch(err => { dbg('mainPlayer.play err', err); });
-  }catch(e){ dbg('attach to mainPlayer failed', e); }
-
-  // If there are no audio tracks attached to the stream, or playback with audio
-  // appears blocked, attempt audio fallback by attaching to a hidden audio element.
-  if (info.audioCount === 0){
-    appendSystem(label + ': no audio track detected');
-  } else {
-    // Attach to hidden audio element as a fallback — some browsers decouple audio
-    // playback from the video element or block it until explicit user interaction.
-    try{
-      mainAudio.srcObject = stream;
-      mainAudio.muted = false;
-      // Try to play audio fallback. If autoplay blocked, we'll show a message.
-      await mainAudio.play().catch(err => {
-        dbg('mainAudio.play err', err);
-        appendSystem('Audio play blocked by autoplay policy. Click the player/Unmute to enable audio.');
-      });
-    }catch(e){ dbg('attach to mainAudio failed', e); }
-  }
 }
 
 /* ======== WebSocket signaling ======== */
@@ -414,12 +366,15 @@ async function createPeerAndOffer(targetId) {
 
   pc.ontrack = (ev) => {
     dbg('pc.ontrack from', targetId, ev.streams);
-    const s = (ev.streams && ev.streams[0]) || null;
-    if (!s) return dbg('pc.ontrack: no stream');
+    // If incoming stream is host stream, attach to mainPlayer for viewers.
     if (currentHostId && targetId === currentHostId) {
-      handleIncomingStream(s, targetId, 'host');
+      mainPlayer.srcObject = ev.streams[0];
+      mainPlayer.muted = false;
+      try { mainPlayer.play().catch(()=>{}); } catch(e){}
       appendSystem('Receiving host stream');
     } else {
+      // Camera/call streams are not used in production UI (call UI commented).
+      // If you re-enable call UI later, attach ev.streams to remote tiles there.
       dbg('received non-host stream (call UI disabled)');
     }
   };
@@ -463,10 +418,10 @@ async function handleOffer(msg) {
 
     pc.ontrack = (ev) => {
       dbg('ontrack (answerer) from', remoteId, ev.streams);
-      const s = (ev.streams && ev.streams[0]) || null;
-      if (!s) return dbg('ontrack: no stream');
       if (currentHostId && remoteId === currentHostId) {
-        handleIncomingStream(s, remoteId, 'host-via-offer');
+        mainPlayer.srcObject = ev.streams[0];
+        mainPlayer.muted = false;
+        try { mainPlayer.play().catch(()=>{}); } catch(e){}
         appendSystem('Receiving host stream (via offer)');
       } else {
         dbg('received non-host stream (call UI disabled)');
